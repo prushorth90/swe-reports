@@ -8,6 +8,7 @@ from app.models.incident import (
     TimelineEvent,
 )
 from app.repositories.incidents import incident_repository
+from app.services.cache import cache_service
 from app.services.ollama import OllamaError, OllamaTimeoutError, ollama_service
 from app.services.query_router import QueryRoute, query_router
 from app.services.rag import RagService
@@ -57,6 +58,17 @@ async def ask_incident_assistant(
     services = incident_repository.list_services(incident_id)
     timeline = incident_repository.list_timeline(incident_id)
     route = query_router.classify(request.question)
+    cache_key = cache_service.build_key(
+        incident,
+        services,
+        timeline,
+        request.question,
+        route,
+    )
+    cached_response = await cache_service.get(cache_key)
+    if cached_response is not None:
+        return cached_response
+
     retrieved_chunks = []
     retrieval_latency_ms = 0
 
@@ -83,7 +95,7 @@ async def ask_incident_assistant(
             detail="Ollama is unavailable",
         ) from error
 
-    return AssistantResponse(
+    response = AssistantResponse(
         answer=result.answer,
         model=result.model,
         total_latency_ms=retrieval_latency_ms + result.total_latency_ms,
@@ -98,3 +110,5 @@ async def ask_incident_assistant(
             for chunk in retrieved_chunks
         ],
     )
+    await cache_service.set(cache_key, response)
+    return response

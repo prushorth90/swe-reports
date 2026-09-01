@@ -2,8 +2,9 @@ from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
-from app.api.incidents import ollama_service, rag_service
+from app.api.incidents import cache_service, ollama_service, rag_service
 from app.main import app
+from app.models.incident import AssistantResponse
 from app.services.ollama import OllamaResult, OllamaTimeoutError
 from app.services.rag import RetrievalResult, RetrievedChunk
 
@@ -138,6 +139,8 @@ def test_ask_incident_assistant() -> None:
 
 
 def test_simple_assistant_question_skips_retrieval() -> None:
+    cache_get = AsyncMock(return_value=None)
+    cache_set = AsyncMock()
     retrieve = AsyncMock()
     generate = AsyncMock(
         return_value=OllamaResult(
@@ -146,8 +149,12 @@ def test_simple_assistant_question_skips_retrieval() -> None:
             total_latency_ms=205,
         )
     )
+    original_cache_get = cache_service.get
+    original_cache_set = cache_service.set
     original_retrieve = rag_service.retrieve
     original_generate = ollama_service.generate
+    cache_service.get = cache_get
+    cache_service.set = cache_set
     rag_service.retrieve = retrieve
     ollama_service.generate = generate
 
@@ -157,6 +164,8 @@ def test_simple_assistant_question_skips_retrieval() -> None:
             json={"question": "What is the payments-service error rate?"},
         )
     finally:
+        cache_service.get = original_cache_get
+        cache_service.set = original_cache_set
         rag_service.retrieve = original_retrieve
         ollama_service.generate = original_generate
 
@@ -177,6 +186,52 @@ def test_simple_assistant_question_skips_retrieval() -> None:
     assert timeline
     assert question == "What is the payments-service error rate?"
     assert chunks == []
+    cache_get.assert_awaited_once()
+    cached_response = cache_set.await_args.args[1]
+    assert cached_response.cache_hit is False
+    assert cached_response.route == "simple"
+
+
+def test_cached_assistant_response_skips_ai_pipeline() -> None:
+    cached_response = AssistantResponse(
+        answer="The incident severity is SEV1.",
+        model="llama3.2:3b",
+        total_latency_ms=190,
+        route="simple",
+        cache_hit=True,
+    )
+    cache_get = AsyncMock(return_value=cached_response)
+    cache_set = AsyncMock()
+    retrieve = AsyncMock()
+    generate = AsyncMock()
+    original_cache_get = cache_service.get
+    original_cache_set = cache_service.set
+    original_retrieve = rag_service.retrieve
+    original_generate = ollama_service.generate
+    cache_service.get = cache_get
+    cache_service.set = cache_set
+    rag_service.retrieve = retrieve
+    ollama_service.generate = generate
+
+    try:
+        response = client.post(
+            "/api/incidents/inc-2026-001/assistant",
+            json={"question": "What severity is this incident?"},
+        )
+    finally:
+        cache_service.get = original_cache_get
+        cache_service.set = original_cache_set
+        rag_service.retrieve = original_retrieve
+        ollama_service.generate = original_generate
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == "The incident severity is SEV1."
+    assert response.json()["cache_hit"] is True
+    assert response.json()["route"] == "simple"
+    cache_get.assert_awaited_once()
+    cache_set.assert_not_awaited()
+    retrieve.assert_not_awaited()
+    generate.assert_not_awaited()
 
 
 def test_assistant_returns_not_found_without_calling_ollama() -> None:
@@ -202,12 +257,18 @@ def test_assistant_returns_not_found_without_calling_ollama() -> None:
 
 
 def test_assistant_handles_ollama_timeout() -> None:
+    cache_get = AsyncMock(return_value=None)
+    cache_set = AsyncMock()
     retrieve = AsyncMock(
         return_value=RetrievalResult(chunks=[], latency_ms=8)
     )
     generate = AsyncMock(side_effect=OllamaTimeoutError())
+    original_cache_get = cache_service.get
+    original_cache_set = cache_service.set
     original_retrieve = rag_service.retrieve
     original_generate = ollama_service.generate
+    cache_service.get = cache_get
+    cache_service.set = cache_set
     rag_service.retrieve = retrieve
     ollama_service.generate = generate
 
@@ -217,11 +278,14 @@ def test_assistant_handles_ollama_timeout() -> None:
             json={"question": "Summarize this incident."},
         )
     finally:
+        cache_service.get = original_cache_get
+        cache_service.set = original_cache_set
         rag_service.retrieve = original_retrieve
         ollama_service.generate = original_generate
 
     assert response.status_code == 504
     assert response.json() == {"detail": "Ollama did not respond before the timeout"}
+    cache_set.assert_not_awaited()
 
 
 def test_assistant_rejects_blank_question() -> None:

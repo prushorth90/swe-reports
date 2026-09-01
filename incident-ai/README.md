@@ -65,6 +65,16 @@ runbooks, troubleshooting, or recommended investigation steps take the `rag` rou
 through vector retrieval first. Routing uses deterministic phrase and keyword rules;
 unmatched questions conservatively use RAG.
 
+Successful assistant responses are cached in Redis. Cache keys include the incident
+ID, normalized question, chosen route, and a hash of the current incident, service,
+and timeline data. Configure expiration with `CACHE_TTL_SECONDS` (default `300`).
+Redis failures are non-fatal: the assistant continues through retrieval and Ollama
+without caching. Failed model responses are never cached.
+
+Docker Compose starts Redis and uses `redis://redis:6379/0`. For a backend running
+directly on the host, set `REDIS_URL=redis://localhost:6379/0` and run a local Redis
+server.
+
 ### Docker Compose
 
 ```bash
