@@ -9,8 +9,10 @@ from app.models.incident import (
 )
 from app.repositories.incidents import incident_repository
 from app.services.ollama import OllamaError, OllamaTimeoutError, ollama_service
+from app.services.rag import RagService
 
 router = APIRouter(prefix="/api/incidents", tags=["incidents"])
+rag_service = RagService(ollama_service)
 
 
 def require_incident(incident_id: str) -> Incident:
@@ -55,11 +57,13 @@ async def ask_incident_assistant(
     timeline = incident_repository.list_timeline(incident_id)
 
     try:
+        retrieval = await rag_service.retrieve(request.question)
         result = await ollama_service.generate(
             incident,
             services,
             timeline,
             request.question,
+            retrieval.chunks,
         )
     except OllamaTimeoutError as error:
         raise HTTPException(
@@ -75,5 +79,14 @@ async def ask_incident_assistant(
     return AssistantResponse(
         answer=result.answer,
         model=result.model,
-        total_latency_ms=result.total_latency_ms,
+        total_latency_ms=retrieval.latency_ms + result.total_latency_ms,
+        retrieval_latency_ms=retrieval.latency_ms,
+        sources=[
+            {
+                "title": chunk.title,
+                "excerpt": chunk.text,
+                "similarity_score": round(chunk.similarity_score, 4),
+            }
+            for chunk in retrieval.chunks
+        ],
     )

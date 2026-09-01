@@ -2,9 +2,10 @@ from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
-from app.api.incidents import ollama_service
+from app.api.incidents import ollama_service, rag_service
 from app.main import app
 from app.services.ollama import OllamaResult, OllamaTimeoutError
+from app.services.rag import RetrievalResult, RetrievedChunk
 
 client = TestClient(app)
 
@@ -77,6 +78,15 @@ def test_incident_endpoints_return_not_found() -> None:
 
 
 def test_ask_incident_assistant() -> None:
+    retrieved_chunk = RetrievedChunk(
+        title="Checkout Latency Response Runbook",
+        document_type="runbook",
+        text="Check Redis connection pool utilization and retry concurrency.",
+        similarity_score=0.92341,
+    )
+    retrieve = AsyncMock(
+        return_value=RetrievalResult(chunks=[retrieved_chunk], latency_ms=12)
+    )
     generate = AsyncMock(
         return_value=OllamaResult(
             answer="Redis pool exhaustion increased checkout retries and latency.",
@@ -84,7 +94,9 @@ def test_ask_incident_assistant() -> None:
             total_latency_ms=418,
         )
     )
+    original_retrieve = rag_service.retrieve
     original_generate = ollama_service.generate
+    rag_service.retrieve = retrieve
     ollama_service.generate = generate
 
     try:
@@ -93,19 +105,26 @@ def test_ask_incident_assistant() -> None:
             json={"question": "Why did checkout latency spike?"},
         )
     finally:
+        rag_service.retrieve = original_retrieve
         ollama_service.generate = original_generate
 
     assert response.status_code == 200
     assert response.json() == {
         "answer": "Redis pool exhaustion increased checkout retries and latency.",
         "model": "llama3.2:3b",
-        "total_latency_ms": 418,
-        "retrieval_latency_ms": 0,
+        "total_latency_ms": 430,
+        "retrieval_latency_ms": 12,
         "cache_hit": False,
-        "route": "ollama",
-        "sources": [],
+        "route": "rag",
+        "sources": [
+            {
+                "title": "Checkout Latency Response Runbook",
+                "excerpt": "Check Redis connection pool utilization and retry concurrency.",
+                "similarity_score": 0.9234,
+            }
+        ],
     }
-    incident, services, timeline, question = generate.await_args.args
+    incident, services, timeline, question, chunks = generate.await_args.args
     assert incident.id == "inc-2026-001"
     assert [service.name for service in services] == [
         "checkout-api",
@@ -114,11 +133,16 @@ def test_ask_incident_assistant() -> None:
     ]
     assert timeline[0].event_type == "detected"
     assert question == "Why did checkout latency spike?"
+    assert chunks == [retrieved_chunk]
+    retrieve.assert_awaited_once_with("Why did checkout latency spike?")
 
 
 def test_assistant_returns_not_found_without_calling_ollama() -> None:
+    retrieve = AsyncMock()
     generate = AsyncMock()
+    original_retrieve = rag_service.retrieve
     original_generate = ollama_service.generate
+    rag_service.retrieve = retrieve
     ollama_service.generate = generate
 
     try:
@@ -127,15 +151,22 @@ def test_assistant_returns_not_found_without_calling_ollama() -> None:
             json={"question": "What happened?"},
         )
     finally:
+        rag_service.retrieve = original_retrieve
         ollama_service.generate = original_generate
 
     assert response.status_code == 404
+    retrieve.assert_not_awaited()
     generate.assert_not_awaited()
 
 
 def test_assistant_handles_ollama_timeout() -> None:
+    retrieve = AsyncMock(
+        return_value=RetrievalResult(chunks=[], latency_ms=8)
+    )
     generate = AsyncMock(side_effect=OllamaTimeoutError())
+    original_retrieve = rag_service.retrieve
     original_generate = ollama_service.generate
+    rag_service.retrieve = retrieve
     ollama_service.generate = generate
 
     try:
@@ -144,6 +175,7 @@ def test_assistant_handles_ollama_timeout() -> None:
             json={"question": "Summarize this incident."},
         )
     finally:
+        rag_service.retrieve = original_retrieve
         ollama_service.generate = original_generate
 
     assert response.status_code == 504

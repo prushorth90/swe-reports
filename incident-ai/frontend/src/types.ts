@@ -32,6 +32,7 @@ export type AssistantRole = 'user' | 'assistant'
 export interface AssistantSource {
   title: string
   excerpt: string
+  similarity_score: number
   url?: string
   service?: string
   timestamp?: string

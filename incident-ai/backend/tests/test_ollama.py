@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from app.repositories.incidents import incident_repository
+from app.services.rag import RetrievedChunk
 from app.services.ollama import (
     SYSTEM_INSTRUCTION,
     OllamaService,
@@ -38,12 +39,21 @@ def test_ollama_service_sends_grounded_prompt() -> None:
         model="test-model",
         transport=httpx.MockTransport(handler),
     )
+    knowledge_chunks = [
+        RetrievedChunk(
+            title="Checkout Latency Response Runbook",
+            document_type="runbook",
+            text="Check Redis connection pool utilization and retry concurrency.",
+            similarity_score=0.91,
+        )
+    ]
     result = asyncio.run(
         service.generate(
             incident,
             services,
             timeline,
             "Why did checkout latency spike?",
+            knowledge_chunks,
         )
     )
 
@@ -54,6 +64,8 @@ def test_ollama_service_sends_grounded_prompt() -> None:
     assert captured_request["stream"] is False
     assert "checkout-api" in captured_request["prompt"]
     assert "Redis capacity was increased" in captured_request["prompt"]
+    assert "Checkout Latency Response Runbook" in captured_request["prompt"]
+    assert "Check Redis connection pool utilization" in captured_request["prompt"]
     assert "Why did checkout latency spike?" in captured_request["prompt"]
 
 
@@ -77,3 +89,28 @@ def test_ollama_service_handles_timeout() -> None:
                 "What should I investigate first?",
             )
         )
+
+
+def test_ollama_service_embeds_text_batch() -> None:
+    captured_request = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured_request["path"] = request.url.path
+        captured_request.update(json.loads(request.content))
+        return httpx.Response(200, json={"embeddings": [[1, 0], [0, 1]]})
+
+    service = OllamaService(
+        base_url="http://ollama.test",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    vectors = asyncio.run(service.embed(["checkout latency", "inventory lag"]))
+
+    assert vectors == [[1.0, 0.0], [0.0, 1.0]]
+    assert captured_request == {
+        "path": "/api/embed",
+        "model": "test-model",
+        "input": ["checkout latency", "inventory lag"],
+        "truncate": True,
+    }

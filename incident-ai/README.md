@@ -53,6 +53,12 @@ Docker Compose defaults to `http://host.docker.internal:11434` so its backend
 container can reach Ollama on the host. Copy values from `.env.example` into a local
 `.env` file to select a different URL or model.
 
+The assistant uses a local RAG pipeline over the Markdown documents in
+`backend/data/knowledge/`. On the first question, the backend chunks and embeds the
+documents with Ollama, then keeps the vectors in memory for subsequent similarity
+searches. The index is rebuilt when the backend restarts; no hosted vector database
+or Azure service is used.
+
 ### Docker Compose
 
 ```bash

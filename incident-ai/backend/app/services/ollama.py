@@ -2,17 +2,20 @@ import json
 import os
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
 from app.models.incident import Incident, Service, TimelineEvent
 
+if TYPE_CHECKING:
+    from app.services.rag import RetrievedChunk
+
 
 SYSTEM_INSTRUCTION = (
     "You are an SRE incident assistant. Answer only using the supplied incident "
-    "context. If the context does not support an answer, say there is insufficient "
-    "evidence. Do not invent a root cause or any facts."
+    "context and retrieved knowledge. If the supplied context does not support an "
+    "answer, say there is insufficient evidence. Do not invent a root cause or any facts."
 )
 
 
@@ -50,18 +53,65 @@ class OllamaService:
         services: list[Service],
         timeline: list[TimelineEvent],
         question: str,
+        knowledge_chunks: Optional[list["RetrievedChunk"]] = None,
     ) -> str:
         context = {
             "incident": incident.model_dump(mode="json"),
             "services": [service.model_dump(mode="json") for service in services],
             "timeline": [event.model_dump(mode="json") for event in timeline],
+            "retrieved_knowledge": [
+                {
+                    "title": chunk.title,
+                    "document_type": chunk.document_type,
+                    "snippet": chunk.text,
+                    "similarity_score": round(chunk.similarity_score, 4),
+                }
+                for chunk in knowledge_chunks or []
+            ],
         }
         return (
-            "Incident context:\n"
+            "Supplied context:\n"
             f"{json.dumps(context, indent=2)}\n\n"
             f"Question: {question}\n"
-            "Answer concisely and cite the relevant facts from the incident context."
+            "Answer concisely and identify the incident facts or retrieved knowledge "
+            "that support the answer."
         )
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        payload = {
+            "model": self.model,
+            "input": texts,
+            "truncate": True,
+        }
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+            ) as client:
+                response = await client.post(f"{self.base_url}/api/embed", json=payload)
+                response.raise_for_status()
+        except httpx.TimeoutException as error:
+            raise OllamaTimeoutError("Ollama did not respond before the timeout") from error
+        except httpx.HTTPError as error:
+            raise OllamaError("Ollama embedding request failed") from error
+
+        try:
+            body: dict[str, Any] = response.json()
+            embeddings = body["embeddings"]
+            if not isinstance(embeddings, list) or len(embeddings) != len(texts):
+                raise ValueError
+            vectors = [
+                [float(value) for value in embedding]
+                for embedding in embeddings
+                if isinstance(embedding, list) and embedding
+            ]
+            if len(vectors) != len(texts):
+                raise ValueError
+            return vectors
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            raise OllamaError("Ollama returned invalid embeddings") from error
 
     async def generate(
         self,
@@ -69,11 +119,18 @@ class OllamaService:
         services: list[Service],
         timeline: list[TimelineEvent],
         question: str,
+        knowledge_chunks: Optional[list["RetrievedChunk"]] = None,
     ) -> OllamaResult:
         payload = {
             "model": self.model,
             "system": SYSTEM_INSTRUCTION,
-            "prompt": self.build_prompt(incident, services, timeline, question),
+            "prompt": self.build_prompt(
+                incident,
+                services,
+                timeline,
+                question,
+                knowledge_chunks,
+            ),
             "stream": False,
         }
         started_at = perf_counter()

@@ -111,6 +111,7 @@ a.evidence-card:hover { border-color: #8fa06a; }
 .evidence-title strong { color: #283532; font-size: 11px; }
 .evidence-title span, .evidence-card time { color: #7b8784; font: 9px var(--font-mono); }
 .evidence-card p { margin: 5px 0; color: #5d6966; font-size: 11px; }
+.evidence-service { display: inline-block; margin-right: 10px; color: #61706c; font: 9px var(--font-mono); }
 .assistant-thinking { display: flex; align-items: center; gap: 4px; }
 .assistant-thinking > span { width: 5px; height: 5px; background: #71807c; border-radius: 50%; animation: pulse 1.2s infinite; }
 .assistant-thinking > span:nth-child(2) { animation-delay: 150ms; }

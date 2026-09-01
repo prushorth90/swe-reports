@@ -69,6 +69,7 @@ class AssistantQuestion(BaseModel):
 class AssistantSource(BaseModel):
     title: str
     excerpt: str
+    similarity_score: float
 
 
 class AssistantResponse(BaseModel):
@@ -77,5 +78,5 @@ class AssistantResponse(BaseModel):
     total_latency_ms: int
     retrieval_latency_ms: int = 0
     cache_hit: bool = False
-    route: str = "ollama"
+    route: str = "rag"
     sources: list[AssistantSource] = Field(default_factory=list)

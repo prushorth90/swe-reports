@@ -94,9 +94,10 @@ function EvidenceCard({ source }: { source: AssistantSource }) {
     <>
       <div className="evidence-title">
         <strong>{source.title}</strong>
-        {source.service ? <span>{source.service}</span> : null}
+        <span>{Math.round(source.similarity_score * 100)}% match</span>
       </div>
       <p>{source.excerpt}</p>
+      {source.service ? <span className="evidence-service">{source.service}</span> : null}
       {source.timestamp ? <time dateTime={source.timestamp}>{formatDate(source.timestamp, true)}</time> : null}
     </>
   )
