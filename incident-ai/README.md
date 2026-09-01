@@ -33,6 +33,26 @@ The API is available at http://localhost:8000. Check it with:
 curl http://localhost:8000/health
 ```
 
+### Local Ollama assistant
+
+Install and start [Ollama](https://ollama.com), then pull the configured model:
+
+```bash
+ollama pull llama3.2:3b
+```
+
+When running the backend directly, configure its Ollama connection before starting
+Uvicorn:
+
+```bash
+export OLLAMA_BASE_URL=http://localhost:11434
+export OLLAMA_MODEL=llama3.2:3b
+```
+
+Docker Compose defaults to `http://host.docker.internal:11434` so its backend
+container can reach Ollama on the host. Copy values from `.env.example` into a local
+`.env` file to select a different URL or model.
+
 ### Docker Compose
 
 ```bash

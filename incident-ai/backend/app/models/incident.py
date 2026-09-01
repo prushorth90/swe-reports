@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class Severity(str, Enum):
@@ -52,3 +52,30 @@ class TimelineEvent(BaseModel):
     timestamp: datetime
     event_type: TimelineEventType
     message: str
+
+
+class AssistantQuestion(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("question")
+    @classmethod
+    def question_must_not_be_blank(cls, value: str) -> str:
+        question = value.strip()
+        if not question:
+            raise ValueError("question must not be blank")
+        return question
+
+
+class AssistantSource(BaseModel):
+    title: str
+    excerpt: str
+
+
+class AssistantResponse(BaseModel):
+    answer: str
+    model: str
+    total_latency_ms: int
+    retrieval_latency_ms: int = 0
+    cache_hit: bool = False
+    route: str = "ollama"
+    sources: list[AssistantSource] = Field(default_factory=list)

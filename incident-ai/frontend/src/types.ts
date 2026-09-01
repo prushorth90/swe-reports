@@ -55,11 +55,15 @@ export interface AssistantMessage {
 }
 
 export interface AssistantRequest {
-  message: string
-  history: Array<Pick<AssistantMessage, 'role' | 'content'>>
+  question: string
 }
 
 export interface AssistantResponse {
-  message: string
-  metadata?: AssistantMessageMetadata
+  answer: string
+  model: string
+  total_latency_ms: number
+  retrieval_latency_ms: number
+  cache_hit: boolean
+  route: string
+  sources: AssistantSource[]
 }

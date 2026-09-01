@@ -1,6 +1,10 @@
+from unittest.mock import AsyncMock
+
 from fastapi.testclient import TestClient
 
+from app.api.incidents import ollama_service
 from app.main import app
+from app.services.ollama import OllamaResult, OllamaTimeoutError
 
 client = TestClient(app)
 
@@ -70,3 +74,86 @@ def test_incident_endpoints_return_not_found() -> None:
         response = client.get(path)
         assert response.status_code == 404
         assert response.json() == {"detail": "Incident 'missing' not found"}
+
+
+def test_ask_incident_assistant() -> None:
+    generate = AsyncMock(
+        return_value=OllamaResult(
+            answer="Redis pool exhaustion increased checkout retries and latency.",
+            model="llama3.2:3b",
+            total_latency_ms=418,
+        )
+    )
+    original_generate = ollama_service.generate
+    ollama_service.generate = generate
+
+    try:
+        response = client.post(
+            "/api/incidents/inc-2026-001/assistant",
+            json={"question": "Why did checkout latency spike?"},
+        )
+    finally:
+        ollama_service.generate = original_generate
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "answer": "Redis pool exhaustion increased checkout retries and latency.",
+        "model": "llama3.2:3b",
+        "total_latency_ms": 418,
+        "retrieval_latency_ms": 0,
+        "cache_hit": False,
+        "route": "ollama",
+        "sources": [],
+    }
+    incident, services, timeline, question = generate.await_args.args
+    assert incident.id == "inc-2026-001"
+    assert [service.name for service in services] == [
+        "checkout-api",
+        "payments-service",
+        "redis",
+    ]
+    assert timeline[0].event_type == "detected"
+    assert question == "Why did checkout latency spike?"
+
+
+def test_assistant_returns_not_found_without_calling_ollama() -> None:
+    generate = AsyncMock()
+    original_generate = ollama_service.generate
+    ollama_service.generate = generate
+
+    try:
+        response = client.post(
+            "/api/incidents/missing/assistant",
+            json={"question": "What happened?"},
+        )
+    finally:
+        ollama_service.generate = original_generate
+
+    assert response.status_code == 404
+    generate.assert_not_awaited()
+
+
+def test_assistant_handles_ollama_timeout() -> None:
+    generate = AsyncMock(side_effect=OllamaTimeoutError())
+    original_generate = ollama_service.generate
+    ollama_service.generate = generate
+
+    try:
+        response = client.post(
+            "/api/incidents/inc-2026-001/assistant",
+            json={"question": "Summarize this incident."},
+        )
+    finally:
+        ollama_service.generate = original_generate
+
+    assert response.status_code == 504
+    assert response.json() == {"detail": "Ollama did not respond before the timeout"}
+
+
+def test_assistant_rejects_blank_question() -> None:
+    response = client.post(
+        "/api/incidents/inc-2026-001/assistant",
+        json={"question": "   "},
+    )
+
+    assert response.status_code == 422

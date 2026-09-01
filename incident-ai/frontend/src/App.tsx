@@ -127,10 +127,6 @@ function AssistantPanel({ incidentId }: { incidentId: string }) {
       content: trimmedQuestion,
       created_at: new Date().toISOString(),
     }
-    const history = messages
-      .filter((message) => message.id !== 'assistant-welcome')
-      .map(({ role, content }) => ({ role, content }))
-
     setMessages((current) => [...current, userMessage])
     setInput('')
     setError(null)
@@ -138,15 +134,21 @@ function AssistantPanel({ incidentId }: { incidentId: string }) {
 
     try {
       const response = await incidentApi.askAssistant(incidentId, {
-        message: trimmedQuestion,
-        history,
+        question: trimmedQuestion,
       })
       setMessages((current) => [...current, {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: response.message,
+        content: response.answer,
         created_at: new Date().toISOString(),
-        metadata: response.metadata,
+        metadata: {
+          model: response.model,
+          total_latency_ms: response.total_latency_ms,
+          retrieval_latency_ms: response.retrieval_latency_ms,
+          cache_hit: response.cache_hit,
+          route: response.route,
+          sources: response.sources,
+        },
       }])
     } catch (requestError: unknown) {
       setError(requestError instanceof Error
@@ -211,7 +213,7 @@ function AssistantPanel({ incidentId }: { incidentId: string }) {
         {error ? (
           <div className="assistant-error" role="alert">
             <strong>Assistant unavailable</strong>
-            <span>{error}. The backend endpoint may not be available yet.</span>
+            <span>{error}. Check that Ollama is running and the configured model is available.</span>
           </div>
         ) : null}
 
