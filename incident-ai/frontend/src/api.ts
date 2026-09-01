@@ -1,4 +1,10 @@
-import type { Incident, Service, TimelineEvent } from './types'
+import type {
+  AssistantRequest,
+  AssistantResponse,
+  Incident,
+  Service,
+  TimelineEvent,
+} from './types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
@@ -12,8 +18,12 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { signal })
+async function request<T>(
+  path: string,
+  signal?: AbortSignal,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, signal })
 
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`
@@ -46,5 +56,17 @@ export const incidentApi = {
 
   timeline(incidentId: string, signal?: AbortSignal): Promise<TimelineEvent[]> {
     return request(`/api/incidents/${encodeURIComponent(incidentId)}/timeline`, signal)
+  },
+
+  askAssistant(
+    incidentId: string,
+    body: AssistantRequest,
+    signal?: AbortSignal,
+  ): Promise<AssistantResponse> {
+    return request(`/api/incidents/${encodeURIComponent(incidentId)}/assistant`, signal, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
   },
 }

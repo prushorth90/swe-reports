@@ -26,3 +26,40 @@ export interface TimelineEvent {
   event_type: TimelineEventType
   message: string
 }
+
+export type AssistantRole = 'user' | 'assistant'
+
+export interface AssistantSource {
+  title: string
+  excerpt: string
+  url?: string
+  service?: string
+  timestamp?: string
+}
+
+export interface AssistantMessageMetadata {
+  model?: string
+  total_latency_ms?: number
+  retrieval_latency_ms?: number
+  cache_hit?: boolean
+  route?: string
+  sources?: AssistantSource[]
+}
+
+export interface AssistantMessage {
+  id: string
+  role: AssistantRole
+  content: string
+  created_at: string
+  metadata?: AssistantMessageMetadata
+}
+
+export interface AssistantRequest {
+  message: string
+  history: Array<Pick<AssistantMessage, 'role' | 'content'>>
+}
+
+export interface AssistantResponse {
+  message: string
+  metadata?: AssistantMessageMetadata
+}

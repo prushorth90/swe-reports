@@ -1,7 +1,15 @@
-import { useEffect, useState } from 'react'
+import { type FormEvent, useEffect, useState } from 'react'
 import { incidentApi } from './api'
-import type { Incident, Service, TimelineEvent } from './types'
+import type { AssistantMessage, AssistantSource, Incident, Service, TimelineEvent } from './types'
 import './App.css'
+
+const suggestedQuestions = [
+  'Why did checkout latency spike?',
+  'Which downstream service is unhealthy?',
+  'Have we seen a similar incident before?',
+  'What should I investigate first?',
+  'Summarize this incident.',
+]
 
 const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
   month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric',
@@ -81,6 +89,150 @@ function IncidentTimeline({ events }: { events: TimelineEvent[] }) {
   )
 }
 
+function EvidenceCard({ source }: { source: AssistantSource }) {
+  const content = (
+    <>
+      <div className="evidence-title">
+        <strong>{source.title}</strong>
+        {source.service ? <span>{source.service}</span> : null}
+      </div>
+      <p>{source.excerpt}</p>
+      {source.timestamp ? <time dateTime={source.timestamp}>{formatDate(source.timestamp, true)}</time> : null}
+    </>
+  )
+
+  return source.url ? <a className="evidence-card" href={source.url} target="_blank" rel="noreferrer">{content}</a> : <article className="evidence-card">{content}</article>
+}
+
+function AssistantPanel({ incidentId }: { incidentId: string }) {
+  const [messages, setMessages] = useState<AssistantMessage[]>([
+    {
+      id: 'assistant-welcome',
+      role: 'assistant',
+      content: 'Ask me to analyze this incident, its affected services, or the response timeline.',
+      created_at: new Date().toISOString(),
+    },
+  ])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function sendQuestion(question: string) {
+    const trimmedQuestion = question.trim()
+    if (!trimmedQuestion || loading) return
+
+    const userMessage: AssistantMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: trimmedQuestion,
+      created_at: new Date().toISOString(),
+    }
+    const history = messages
+      .filter((message) => message.id !== 'assistant-welcome')
+      .map(({ role, content }) => ({ role, content }))
+
+    setMessages((current) => [...current, userMessage])
+    setInput('')
+    setError(null)
+    setLoading(true)
+
+    try {
+      const response = await incidentApi.askAssistant(incidentId, {
+        message: trimmedQuestion,
+        history,
+      })
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: response.message,
+        created_at: new Date().toISOString(),
+        metadata: response.metadata,
+      }])
+    } catch (requestError: unknown) {
+      setError(requestError instanceof Error
+        ? requestError.message
+        : 'The assistant could not complete the request.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void sendQuestion(input)
+  }
+
+  return (
+    <section className="dashboard-section assistant-section" aria-labelledby="assistant-heading">
+      <div className="section-heading">
+        <div><span className="section-index">03</span><h2 id="assistant-heading">AI Incident Assistant</h2></div>
+        <span className="assistant-state"><i aria-hidden="true" />Analysis workspace</span>
+      </div>
+
+      <div className="assistant-panel">
+        <div className="conversation" aria-live="polite">
+          {messages.map((message) => (
+            <article key={message.id} className={`message message-${message.role}`}>
+              <div className="message-author">{message.role === 'assistant' ? 'Incident AI' : 'You'}</div>
+              <div className="message-body">
+                <p>{message.content}</p>
+                {message.metadata?.sources?.length ? (
+                  <div className="evidence-list">
+                    <span className="evidence-label">Evidence</span>
+                    {message.metadata.sources.map((source, index) => <EvidenceCard key={`${source.title}-${index}`} source={source} />)}
+                  </div>
+                ) : null}
+                {message.metadata ? (
+                  <div className="message-metadata">
+                    {message.metadata.model ? <span>Model: {message.metadata.model}</span> : null}
+                    {message.metadata.total_latency_ms !== undefined ? <span>Total: {message.metadata.total_latency_ms} ms</span> : null}
+                    {message.metadata.retrieval_latency_ms !== undefined ? <span>Retrieval: {message.metadata.retrieval_latency_ms} ms</span> : null}
+                    {message.metadata.cache_hit !== undefined ? <span>Cache: {message.metadata.cache_hit ? 'hit' : 'miss'}</span> : null}
+                    {message.metadata.route ? <span>Route: {message.metadata.route}</span> : null}
+                  </div>
+                ) : null}
+              </div>
+            </article>
+          ))}
+          {loading ? (
+            <article className="message message-assistant" role="status">
+              <div className="message-author">Incident AI</div>
+              <div className="message-body assistant-thinking"><span /><span /><span /><em>Analyzing incident data</em></div>
+            </article>
+          ) : null}
+        </div>
+
+        <div className="suggestions" aria-label="Suggested questions">
+          {suggestedQuestions.map((question) => (
+            <button key={question} type="button" onClick={() => void sendQuestion(question)} disabled={loading}>{question}</button>
+          ))}
+        </div>
+
+        {error ? (
+          <div className="assistant-error" role="alert">
+            <strong>Assistant unavailable</strong>
+            <span>{error}. The backend endpoint may not be available yet.</span>
+          </div>
+        ) : null}
+
+        <form className="assistant-composer" onSubmit={handleSubmit}>
+          <label htmlFor={`assistant-input-${incidentId}`}>Ask about this incident</label>
+          <div>
+            <input
+              id={`assistant-input-${incidentId}`}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Ask a question about impact, cause, or next steps"
+              disabled={loading}
+            />
+            <button type="submit" disabled={loading || !input.trim()}>{loading ? 'Sending' : 'Send'}</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  )
+}
+
 function IncidentDetail({ incident, services, timeline }: {
   incident: Incident
   services: Service[]
@@ -123,6 +275,8 @@ function IncidentDetail({ incident, services, timeline }: {
         </div>
         {timeline.length ? <IncidentTimeline events={timeline} /> : <p className="empty-inline">No timeline events have been recorded.</p>}
       </section>
+
+      <AssistantPanel key={incident.id} incidentId={incident.id} />
     </>
   )
 }
@@ -142,12 +296,19 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController()
-    setListLoading(true)
-    setListError(null)
     incidentApi.list(controller.signal)
       .then((data) => {
         setIncidents(data)
-        setSelectedId((current) => current ?? data[0]?.id ?? null)
+        setSelectedId((current) => data.some((item) => item.id === current) ? current : data[0]?.id ?? null)
+        if (data.length) {
+          setDetailLoading(true)
+          setDetailError(null)
+          setDetailRequest((value) => value + 1)
+        } else {
+          setIncident(null)
+          setServices([])
+          setTimeline([])
+        }
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
@@ -158,16 +319,9 @@ function App() {
   }, [listRequest])
 
   useEffect(() => {
-    if (!selectedId) {
-      setIncident(null)
-      setServices([])
-      setTimeline([])
-      return
-    }
+    if (!selectedId) return
 
     const controller = new AbortController()
-    setDetailLoading(true)
-    setDetailError(null)
     Promise.all([
       incidentApi.get(selectedId, controller.signal),
       incidentApi.services(selectedId, controller.signal),
@@ -186,6 +340,25 @@ function App() {
     return () => controller.abort()
   }, [selectedId, detailRequest])
 
+  function selectIncident(incidentId: string) {
+    if (incidentId === selectedId) return
+    setDetailLoading(true)
+    setDetailError(null)
+    setSelectedId(incidentId)
+  }
+
+  function retryIncidentList() {
+    setListLoading(true)
+    setListError(null)
+    setListRequest((value) => value + 1)
+  }
+
+  function retryIncidentDetail() {
+    setDetailLoading(true)
+    setDetailError(null)
+    setDetailRequest((value) => value + 1)
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -196,11 +369,11 @@ function App() {
         <div className="sidebar-heading"><h2>Active incidents</h2><span>{incidents.length}</span></div>
         <nav aria-label="Incidents">
           {listLoading ? <LoadingPanel label="Loading incidents" /> : null}
-          {listError ? <ErrorPanel message={listError} onRetry={() => setListRequest((value) => value + 1)} /> : null}
+          {listError ? <ErrorPanel message={listError} onRetry={retryIncidentList} /> : null}
           {!listLoading && !listError && !incidents.length ? <p className="sidebar-empty">No incidents reported.</p> : null}
           <ul className="incident-list">
             {incidents.map((item) => (
-              <IncidentNavItem key={item.id} incident={item} selected={item.id === selectedId} onSelect={() => setSelectedId(item.id)} />
+              <IncidentNavItem key={item.id} incident={item} selected={item.id === selectedId} onSelect={() => selectIncident(item.id)} />
             ))}
           </ul>
         </nav>
@@ -209,7 +382,7 @@ function App() {
 
       <main className="main-content">
         {detailLoading ? <LoadingPanel label="Loading incident details" /> : null}
-        {!detailLoading && detailError ? <ErrorPanel message={detailError} onRetry={() => setDetailRequest((value) => value + 1)} /> : null}
+        {!detailLoading && detailError ? <ErrorPanel message={detailError} onRetry={retryIncidentDetail} /> : null}
         {!detailLoading && !detailError && incident ? <IncidentDetail incident={incident} services={services} timeline={timeline} /> : null}
         {!detailLoading && !detailError && !incident ? (
           <div className="empty-state">
