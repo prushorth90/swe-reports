@@ -59,6 +59,12 @@ documents with Ollama, then keeps the vectors in memory for subsequent similarit
 searches. The index is rebuilt when the backend restarts; no hosted vector database
 or Azure service is used.
 
+Questions about the active incident fields, service metrics, or timeline take the
+`simple` route directly to Ollama. Questions that mention historical incidents,
+runbooks, troubleshooting, or recommended investigation steps take the `rag` route
+through vector retrieval first. Routing uses deterministic phrase and keyword rules;
+unmatched questions conservatively use RAG.
+
 ### Docker Compose
 
 ```bash

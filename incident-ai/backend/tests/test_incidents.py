@@ -102,7 +102,7 @@ def test_ask_incident_assistant() -> None:
     try:
         response = client.post(
             "/api/incidents/inc-2026-001/assistant",
-            json={"question": "Why did checkout latency spike?"},
+            json={"question": "Which runbook should I follow?"},
         )
     finally:
         rag_service.retrieve = original_retrieve
@@ -132,9 +132,51 @@ def test_ask_incident_assistant() -> None:
         "redis",
     ]
     assert timeline[0].event_type == "detected"
-    assert question == "Why did checkout latency spike?"
+    assert question == "Which runbook should I follow?"
     assert chunks == [retrieved_chunk]
-    retrieve.assert_awaited_once_with("Why did checkout latency spike?")
+    retrieve.assert_awaited_once_with("Which runbook should I follow?")
+
+
+def test_simple_assistant_question_skips_retrieval() -> None:
+    retrieve = AsyncMock()
+    generate = AsyncMock(
+        return_value=OllamaResult(
+            answer="The payments-service error rate is 5.2 percent.",
+            model="llama3.2:3b",
+            total_latency_ms=205,
+        )
+    )
+    original_retrieve = rag_service.retrieve
+    original_generate = ollama_service.generate
+    rag_service.retrieve = retrieve
+    ollama_service.generate = generate
+
+    try:
+        response = client.post(
+            "/api/incidents/inc-2026-001/assistant",
+            json={"question": "What is the payments-service error rate?"},
+        )
+    finally:
+        rag_service.retrieve = original_retrieve
+        ollama_service.generate = original_generate
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "answer": "The payments-service error rate is 5.2 percent.",
+        "model": "llama3.2:3b",
+        "total_latency_ms": 205,
+        "retrieval_latency_ms": 0,
+        "cache_hit": False,
+        "route": "simple",
+        "sources": [],
+    }
+    retrieve.assert_not_awaited()
+    incident, services, timeline, question, chunks = generate.await_args.args
+    assert incident.id == "inc-2026-001"
+    assert services[1].name == "payments-service"
+    assert timeline
+    assert question == "What is the payments-service error rate?"
+    assert chunks == []
 
 
 def test_assistant_returns_not_found_without_calling_ollama() -> None:

@@ -9,6 +9,7 @@ from app.models.incident import (
 )
 from app.repositories.incidents import incident_repository
 from app.services.ollama import OllamaError, OllamaTimeoutError, ollama_service
+from app.services.query_router import QueryRoute, query_router
 from app.services.rag import RagService
 
 router = APIRouter(prefix="/api/incidents", tags=["incidents"])
@@ -55,15 +56,21 @@ async def ask_incident_assistant(
     incident = require_incident(incident_id)
     services = incident_repository.list_services(incident_id)
     timeline = incident_repository.list_timeline(incident_id)
+    route = query_router.classify(request.question)
+    retrieved_chunks = []
+    retrieval_latency_ms = 0
 
     try:
-        retrieval = await rag_service.retrieve(request.question)
+        if route is QueryRoute.RAG:
+            retrieval = await rag_service.retrieve(request.question)
+            retrieved_chunks = retrieval.chunks
+            retrieval_latency_ms = retrieval.latency_ms
         result = await ollama_service.generate(
             incident,
             services,
             timeline,
             request.question,
-            retrieval.chunks,
+            retrieved_chunks,
         )
     except OllamaTimeoutError as error:
         raise HTTPException(
@@ -79,14 +86,15 @@ async def ask_incident_assistant(
     return AssistantResponse(
         answer=result.answer,
         model=result.model,
-        total_latency_ms=retrieval.latency_ms + result.total_latency_ms,
-        retrieval_latency_ms=retrieval.latency_ms,
+        total_latency_ms=retrieval_latency_ms + result.total_latency_ms,
+        retrieval_latency_ms=retrieval_latency_ms,
+        route=route.value,
         sources=[
             {
                 "title": chunk.title,
                 "excerpt": chunk.text,
                 "similarity_score": round(chunk.similarity_score, 4),
             }
-            for chunk in retrieval.chunks
+            for chunk in retrieved_chunks
         ],
     )
